@@ -1,7 +1,9 @@
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const MikroNode = require("mikronode");
-require("dotenv").config();
+const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 app.use(cors());
@@ -9,20 +11,25 @@ app.use(express.json());
 
 /* ================= CONFIG ================= */
 
-// MikroTik (اختياري حالياً)
+const FRONT_URL = process.env.FRONT_URL;
+
+// MikroTik (لما نستخدمه لاحقًا)
 const ROUTER_IP = "192.168.56.102";
 const USER = "admin";
 const PASS = "123456";
 
-// Paymob ENV
+// Paymob
 const PAYMOB_API_KEY = process.env.PAYMOB_API_KEY;
 const INTEGRATION_ID = process.env.INTEGRATION_ID;
 const IFRAME_ID = process.env.IFRAME_ID;
 
-// فرونت
-const FRONT_URL = process.env.FRONT || "http://localhost:5173";
+// Supabase
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 
-/* ================= AUTH TOKEN ================= */
+/* ================= AUTH ================= */
 
 async function getAuthToken() {
   const res = await fetch("https://accept.paymob.com/api/auth/tokens", {
@@ -45,7 +52,6 @@ app.post("/pay", async (req, res) => {
 
     const token = await getAuthToken();
 
-    // Create order
     const orderRes = await fetch(
       "https://accept.paymob.com/api/ecommerce/orders",
       {
@@ -63,7 +69,6 @@ app.post("/pay", async (req, res) => {
 
     const order = await orderRes.json();
 
-    // Create payment key
     const payKeyRes = await fetch(
       "https://accept.paymob.com/api/acceptance/payment_keys",
       {
@@ -78,7 +83,6 @@ app.post("/pay", async (req, res) => {
           order_id: order.id,
           currency: "EGP",
           integration_id: INTEGRATION_ID,
-
           billing_data: {
             first_name: "wifi",
             last_name: "user",
@@ -97,72 +101,42 @@ app.post("/pay", async (req, res) => {
 
     const payKey = await payKeyRes.json();
 
-    if (!payKey.token) {
-      console.log("❌ Paymob error:", payKey);
-      return res.status(500).json({ error: "Payment token missing" });
-    }
-
     const iframeURL = `https://accept.paymob.com/api/acceptance/iframes/${IFRAME_ID}?payment_token=${payKey.token}`;
 
     res.json({ url: iframeURL });
-
   } catch (err) {
-    console.log("🔥 PAY ERROR:", err);
+    console.log(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-/* ================= SUCCESS CALLBACK ================= */
+/* ================= SUCCESS ================= */
 
 app.get("/success", async (req, res) => {
   try {
     const success = req.query.success === "true";
 
-    if (!success) {
-      return res.send("❌ Payment failed");
-    }
+    if (!success) return res.send("❌ Payment failed");
 
-    // Generate voucher
+    // generate card
     const username = Math.random().toString(36).substring(2, 8);
     const password = Math.random().toString(36).substring(2, 8);
 
-    // MikroTik (safe cloud mode)
-    try {
-  const device = new MikroNode(ROUTER_IP);
-  const [login] = await device.connect();
+    // 🔥 نحفظ الكارت في Supabase
+    await supabase.from("vouchers").insert({
+      username,
+      password,
+      status: "pending",
+    });
 
-  const conn = await login(USER, PASS);
-  const chan = conn.openChannel();
+    console.log("✅ Card saved in Supabase");
 
-  chan.write([
-    "/ip/hotspot/user/add",
-    `=name=${username}`,
-    `=password=${password}`,
-  ]);
-
-  chan.on("done", (data) => {
-    console.log("✅ User added to MikroTik:", username);
-    conn.close();
-  });
-
-  chan.on("trap", (err) => {
-    console.log("❌ MikroTik ERROR:", err);
-  });
-
-  chan.on("timeout", () => {
-    console.log("⏰ MikroTik timeout");
-  });
-
-} catch (err) {
-  console.log("🔥 MikroTik connection failed:", err.message);
-}
-    
-
-    // Redirect to frontend
-    res.redirect(`${FRONT_URL}/success?user=${username}&pass=${password}`);
-
+    // تحويل للفرونت
+    res.redirect(
+      `${FRONT_URL}/success?user=${username}&pass=${password}`
+    );
   } catch (err) {
-    console.log("🔥 SUCCESS ERROR:", err);
+    console.log(err);
     res.send("Server error");
   }
 });
@@ -170,8 +144,7 @@ app.get("/success", async (req, res) => {
 /* ================= HEALTH ================= */
 
 app.get("/", (req, res) => {
-  res.send("🔥 Paymob server running");
+  res.send("🔥 Server running with Supabase");
 });
 
-app.listen(8080, () => console.log("🚀 Backend running on 8080"));
-
+app.listen(8080, () => console.log("🚀 Server started"));
