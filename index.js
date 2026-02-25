@@ -128,21 +128,35 @@ app.get("/success", async (req, res) => {
 
     // MikroTik (safe cloud mode)
     try {
-      const device = new MikroNode(ROUTER_IP);
-      const [login] = await device.connect();
-      const conn = await login(USER, PASS);
-      const chan = conn.openChannel();
+  const device = new MikroNode(ROUTER_IP);
+  const [login] = await device.connect();
 
-      chan.write([
-        "/ip/hotspot/user/add",
-        `=name=${username}`,
-        `=password=${password}`,
-      ]);
+  const conn = await login(USER, PASS);
+  const chan = conn.openChannel();
 
-      chan.on("done", () => conn.close());
-    } catch (e) {
-      console.log("⚠️ MikroTik skipped (cloud mode)");
-    }
+  chan.write([
+    "/ip/hotspot/user/add",
+    `=name=${username}`,
+    `=password=${password}`,
+  ]);
+
+  chan.on("done", (data) => {
+    console.log("✅ User added to MikroTik:", username);
+    conn.close();
+  });
+
+  chan.on("trap", (err) => {
+    console.log("❌ MikroTik ERROR:", err);
+  });
+
+  chan.on("timeout", () => {
+    console.log("⏰ MikroTik timeout");
+  });
+
+} catch (err) {
+  console.log("🔥 MikroTik connection failed:", err.message);
+}
+    
 
     // Redirect to frontend
     res.redirect(`${FRONT_URL}/success?user=${username}&pass=${password}`);
@@ -160,3 +174,4 @@ app.get("/", (req, res) => {
 });
 
 app.listen(8080, () => console.log("🚀 Backend running on 8080"));
+
